@@ -13,39 +13,43 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 - <<'EOF'
-          import json, re, os, time, urllib.parse, urllib.request
+          import json, re, os, time, collections, urllib.parse, urllib.request
           from datetime import datetime, timezone
           H = {"Accept": "application/vnd.github+json", "Authorization": "Bearer " + os.environ["GH_TOKEN"], "User-Agent": "demand-scanner"}
-          QS = ['label:"💎 Bounty" is:issue is:open', 'label:bounty is:issue is:open', 'bounty in:title is:issue is:open']
-          seen = {}
-          for n, q in enumerate(QS):
-              u = "https://api.github.com/search/issues?" + urllib.parse.urlencode({"q": q, "sort": "created", "order": "desc", "per_page": 100})
+          def get(q, page):
+              u = "https://api.github.com/search/issues?" + urllib.parse.urlencode({"q": q, "sort": "created", "order": "desc", "per_page": 100, "page": page})
+              with urllib.request.urlopen(urllib.request.Request(u, headers=H), timeout=30) as r:
+                  return json.load(r), r.headers.get("x-ratelimit-remaining")
+          items = {}
+          jobs = [('label:"💎 Bounty" is:issue is:open', p) for p in (1, 2, 3)] + [('label:bounty is:issue is:open', 1)]
+          for q, p in jobs:
               try:
-                  with urllib.request.urlopen(urllib.request.Request(u, headers=H), timeout=30) as r:
-                      d = json.load(r)
-                      rem = r.headers.get("x-ratelimit-remaining")
+                  d, rem = get(q, p)
               except Exception as e:
-                  print("ERROR", q, e)
+                  print("ERROR", q, p, e)
                   continue
-              print(q, "| total:", d["total_count"], "| fetched:", len(d["items"]), "| rate remaining:", rem)
-              if n < 2:
-                  for it in d["items"]:
-                      seen.setdefault(it["id"], it)
-                  if d["items"]:
-                      print("  sample labels:", [l["name"] for l in d["items"][0]["labels"]])
+              for it in d["items"]:
+                  items.setdefault(it["id"], it)
+              print(q, "page", p, "| fetched", len(d["items"]), "| rate remaining", rem)
               time.sleep(3)
           now = datetime.now(timezone.utc)
           rows = []
-          for it in seen.values():
+          for it in items.values():
               txt = it["title"] + " " + " ".join(l["name"] for l in it["labels"])
               m = re.search(r"\$\s?([\d,]+(?:\.\d+)?)\s?(k)?", txt, re.I)
               amt = float(m.group(1).replace(",", "")) * (1000 if m.group(2) else 1) if m else None
               age = (now - datetime.fromisoformat(it["created_at"].replace("Z", "+00:00"))).days
-              rows.append((amt, it["comments"], age, it["repository_url"].split("repos/")[1], it["title"][:60], it["html_url"]))
-          print("\nlabel-based open bounty issues:", len(rows))
-          print("with $ amount found:", sum(r[0] is not None for r in rows))
-          print("comments 0-2:", sum(r[1] <= 2 for r in rows), "| 3-10:", sum(3 <= r[1] <= 10 for r in rows), "| >10:", sum(r[1] > 10 for r in rows))
+              repo = it["repository_url"].split("repos/")[1]
+              rows.append((amt, it["comments"], age, repo, it["title"][:55], it["html_url"]))
+          cnt = collections.Counter(r[3] for r in rows)
+          print("\nissues:", len(rows), "| repos:", len(cnt))
+          print("top repos by issue count:", cnt.most_common(8))
+          big = {r for r, c in cnt.items() if c >= 5}
+          rest = [r for r in rows if r[3] not in big]
+          amt_rows = [r for r in rest if r[0] is not None]
+          low = [r for r in amt_rows if r[1] <= 2]
+          print("after excluding repos with 5+ issues:", len(rest), "| with $ amount:", len(amt_rows), "| with 0-2 comments:", len(low))
           print("\namount | comments | age_days | repo | title | url")
-          for r in sorted([x for x in rows if x[0] is not None], key=lambda x: -x[0])[:20]:
+          for r in sorted(low, key=lambda x: -x[0])[:25]:
               print(int(r[0]), r[1], r[2], r[3], r[4], r[5])
           EOF
