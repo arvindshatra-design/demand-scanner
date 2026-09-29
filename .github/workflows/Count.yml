@@ -1,0 +1,43 @@
+name: count
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/count.yml']
+jobs:
+  count:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Count skills
+        run: |
+          python3 - <<'EOF'
+          import json, re, html, time, urllib.request
+          T = {"2026-01":46467231,"2026-02":46857644,"2026-04":47602028,"2026-06":48358236,"2026-07":48749020,"2026-08":49157021,"2026-09":49521942}
+          S = {"python":r"python","scraping":r"scrap|crawl","excel":r"excel|spreadsheet","automation":r"automat","data":r"data (analy|engineer|scien|pipeline)|\betl\b","sql":r"\bsql\b|postgres|mysql","react":r"\breact\b","wordpress":r"wordpress","ai/llm":r"\bai\b|llm|machine learning|gpt","mobile":r"\bios\b|android|flutter|react native","devops/cloud":r"devops|\baws\b|kubernetes"}
+          sup, dem, oth = [], [], []
+          for m, i in T.items():
+              try:
+                  with urllib.request.urlopen(f"https://hn.algolia.com/api/v1/items/{i}", timeout=60) as r:
+                      d = json.load(r)
+              except Exception as e:
+                  print("ERROR", m, e)
+                  continue
+              a = b = c = 0
+              for k in d.get("children", []):
+                  t = html.unescape(re.sub(r"<[^>]+>", " ", k.get("text") or "")).lower()
+                  h = t[:60]
+                  if "seeking work" in h:
+                      sup.append(t); a += 1
+                  elif "seeking freelancer" in h:
+                      dem.append(t); b += 1
+                  else:
+                      oth.append(t); c += 1
+              print(m, "work-seekers:", a, "hirers:", b, "other:", c)
+              time.sleep(1)
+          print("TOTAL work-seekers:", len(sup), "hirers:", len(dem), "other:", len(oth))
+          for t in oth[:3]:
+              print("other sample:", t[:80])
+          print("skill | hirers mention | seekers mention")
+          for s, p in S.items():
+              print(s, "|", sum(bool(re.search(p, t)) for t in dem), "|", sum(bool(re.search(p, t)) for t in sup))
+          EOF
