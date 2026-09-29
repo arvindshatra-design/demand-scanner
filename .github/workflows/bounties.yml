@@ -1,0 +1,51 @@
+name: bounties
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/bounties.yml']
+jobs:
+  bounties:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Measure open bounties
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'EOF'
+          import json, re, os, time, urllib.parse, urllib.request
+          from datetime import datetime, timezone
+          H = {"Accept": "application/vnd.github+json", "Authorization": "Bearer " + os.environ["GH_TOKEN"], "User-Agent": "demand-scanner"}
+          QS = ['label:"💎 Bounty" is:issue is:open', 'label:bounty is:issue is:open', 'bounty in:title is:issue is:open']
+          seen = {}
+          for n, q in enumerate(QS):
+              u = "https://api.github.com/search/issues?" + urllib.parse.urlencode({"q": q, "sort": "created", "order": "desc", "per_page": 100})
+              try:
+                  with urllib.request.urlopen(urllib.request.Request(u, headers=H), timeout=30) as r:
+                      d = json.load(r)
+                      rem = r.headers.get("x-ratelimit-remaining")
+              except Exception as e:
+                  print("ERROR", q, e)
+                  continue
+              print(q, "| total:", d["total_count"], "| fetched:", len(d["items"]), "| rate remaining:", rem)
+              if n < 2:
+                  for it in d["items"]:
+                      seen.setdefault(it["id"], it)
+                  if d["items"]:
+                      print("  sample labels:", [l["name"] for l in d["items"][0]["labels"]])
+              time.sleep(3)
+          now = datetime.now(timezone.utc)
+          rows = []
+          for it in seen.values():
+              txt = it["title"] + " " + " ".join(l["name"] for l in it["labels"])
+              m = re.search(r"\$\s?([\d,]+(?:\.\d+)?)\s?(k)?", txt, re.I)
+              amt = float(m.group(1).replace(",", "")) * (1000 if m.group(2) else 1) if m else None
+              age = (now - datetime.fromisoformat(it["created_at"].replace("Z", "+00:00"))).days
+              rows.append((amt, it["comments"], age, it["repository_url"].split("repos/")[1], it["title"][:60], it["html_url"]))
+          print("\nlabel-based open bounty issues:", len(rows))
+          print("with $ amount found:", sum(r[0] is not None for r in rows))
+          print("comments 0-2:", sum(r[1] <= 2 for r in rows), "| 3-10:", sum(3 <= r[1] <= 10 for r in rows), "| >10:", sum(r[1] > 10 for r in rows))
+          print("\namount | comments | age_days | repo | title | url")
+          for r in sorted([x for x in rows if x[0] is not None], key=lambda x: -x[0])[:20]:
+              print(int(r[0]), r[1], r[2], r[3], r[4], r[5])
+          EOF
