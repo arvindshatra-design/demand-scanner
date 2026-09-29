@@ -1,0 +1,26 @@
+name: scan
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/scan.yml']
+  schedule:
+    - cron: '0 6 * * *'
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: HN demand scan
+        run: |
+          python3 - <<'EOF'
+          import json, time, urllib.parse, urllib.request
+          since = int(time.time()) - 30*86400
+          for q in ["is there a tool", "looking for", "I wish there was"]:
+              p = urllib.parse.urlencode({"query": q, "tags": "ask_hn", "hitsPerPage": 10, "numericFilters": f"created_at_i>{since}"})
+              with urllib.request.urlopen("https://hn.algolia.com/api/v1/search?" + p, timeout=20) as r:
+                  d = json.load(r)
+              print("\n##", q, "| total:", d["nbHits"])
+              for h in d["hits"]:
+                  print(h.get("points"), h.get("num_comments"), h["title"])
+              time.sleep(1)
+          EOF
